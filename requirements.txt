@@ -1,0 +1,49 @@
+
+# Environment and configuration
+python-dotenv
+
+# LangChain and LangGraph
+langchain
+langchain-core
+langchain-community
+langchain-text-splitters
+langchain-openai
+langgraph
+langgraph-checkpoint
+langgraph-checkpoint-sqlite
+
+# RAG and vector database
+langchain-chroma
+chromadb
+sentence-transformers
+
+# Document loading
+pypdf
+beautifulsoup4
+requests
+
+# Database and persistence
+sqlalchemy
+psycopg[binary]
+aiosqlite
+
+# FastAPI
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+
+# Monitoring and evaluation
+langsmith
+
+# AWS integration
+boto3
+
+# HTTP and retries
+httpx
+tenacity
+
+# Testing and code quality
+pytest
+pytest-asyncio
+ruff
