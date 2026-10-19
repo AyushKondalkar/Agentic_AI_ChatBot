@@ -1,4 +1,35 @@
+
+# Environment variables and secrets
 .env
+.env.*
+!.env.example
+
+# Python virtual environment
 .venv/
+venv/
+env/
+
+# Python cache files
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+
+# SQLite database and local conversation data
+*.db
+*.db-*
+chat_threads.json
+
+# Logs
+*.log
+logs/
+
+# IDE and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test and coverage files
+.pytest_cache/
+.coverage
+htmlcov/
