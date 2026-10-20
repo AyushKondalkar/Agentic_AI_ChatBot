@@ -1,6 +1,7 @@
 
-
 import sys
+import hashlib
+import json
 from pathlib import Path
 
 import streamlit as st
@@ -20,6 +21,7 @@ from memory.checkpointer import (
     delete_thread_checkpoints,
 )
 from ChatBot_workflow import graph
+from rag.ingestion import ingest_pdf
 
 
 # --------------------------------------------------
@@ -33,26 +35,23 @@ st.set_page_config(
 )
 
 st.title("🤖 Agentic AI Chatbot")
-st.caption("Powered by Groq, LangGraph, SQLite, and Streamlit")
+st.caption(
+    "Powered by Groq, LangGraph, SQLite, Gemini Embeddings, "
+    "ChromaDB, and Streamlit"
+)
 
 
 # --------------------------------------------------
-# 3. Initialize chat manager
+# 3. Initialize chat manager and workflow
 # --------------------------------------------------
 
 chat_manager = ChatManager()
 
 
-# --------------------------------------------------
-# 4. Create workflow with persistent memory
-# --------------------------------------------------
-
 @st.cache_resource
 def create_workflow():
     checkpointer, connection = get_checkpointer()
     workflow = graph.compile(checkpointer=checkpointer)
-
-    # Keep the database connection alive.
     return workflow, checkpointer, connection
 
 
@@ -60,7 +59,7 @@ workflow, checkpointer, connection = create_workflow()
 
 
 # --------------------------------------------------
-# 5. Initialize active conversation
+# 4. Initialize active conversation
 # --------------------------------------------------
 
 if "active_thread_id" not in st.session_state:
@@ -69,9 +68,7 @@ if "active_thread_id" not in st.session_state:
 threads = chat_manager.load_threads()
 
 if not threads:
-    st.session_state.active_thread_id = (
-        chat_manager.create_thread()
-    )
+    st.session_state.active_thread_id = chat_manager.create_thread()
     threads = chat_manager.load_threads()
 
 elif not any(
@@ -82,15 +79,12 @@ elif not any(
 
 
 # --------------------------------------------------
-# 6. Delete one chat from SQLite and JSON
+# 5. Delete chat
 # --------------------------------------------------
 
 def delete_chat(thread_id):
-    # Delete persistent LangGraph state first.
-    # If this fails, do not remove the sidebar entry.
     delete_thread_checkpoints(checkpointer, thread_id)
 
-    # Remove only the selected chat's metadata.
     remaining_threads = [
         thread
         for thread in chat_manager.load_threads()
@@ -99,20 +93,15 @@ def delete_chat(thread_id):
 
     chat_manager.save_threads(remaining_threads)
 
-    # If the active chat was deleted, select another chat.
     if st.session_state.active_thread_id == thread_id:
         if remaining_threads:
-            st.session_state.active_thread_id = (
-                remaining_threads[0]["id"]
-            )
+            st.session_state.active_thread_id = remaining_threads[0]["id"]
         else:
-            st.session_state.active_thread_id = (
-                chat_manager.create_thread()
-            )
+            st.session_state.active_thread_id = chat_manager.create_thread()
 
 
 # --------------------------------------------------
-# 7. Sidebar: New Chat and Chat History
+# 6. Sidebar: chats and PDF upload
 # --------------------------------------------------
 
 with st.sidebar:
@@ -123,9 +112,7 @@ with st.sidebar:
         use_container_width=True,
         type="primary",
     ):
-        st.session_state.active_thread_id = (
-            chat_manager.create_thread()
-        )
+        st.session_state.active_thread_id = chat_manager.create_thread()
         st.rerun()
 
     st.divider()
@@ -135,16 +122,9 @@ with st.sidebar:
 
     for thread in threads:
         thread_id_item = thread["id"]
-        is_active = (
-            thread_id_item == st.session_state.active_thread_id
-        )
+        is_active = thread_id_item == st.session_state.active_thread_id
+        label = f"● {thread['title']}" if is_active else thread["title"]
 
-        label = thread["title"]
-
-        if is_active:
-            label = f"● {label}"
-
-        # Title and cross appear on the same row.
         title_col, delete_col = st.columns(
             [0.82, 0.18],
             vertical_alignment="center",
@@ -156,11 +136,8 @@ with st.sidebar:
                 label,
                 key=f"thread_{thread_id_item}",
                 use_container_width=True,
-                type="secondary",
             ):
-                st.session_state.active_thread_id = (
-                    thread_id_item
-                )
+                st.session_state.active_thread_id = thread_id_item
                 st.rerun()
 
         with delete_col:
@@ -173,41 +150,128 @@ with st.sidebar:
                 try:
                     delete_chat(thread_id_item)
                     st.rerun()
-
                 except Exception as error:
-                    st.error(
-                        f"Could not delete chat: {error}"
+                    st.error(f"Could not delete chat: {error}")
+
+    # ----------------------------------------------
+    # PDF upload for the active chat
+    # ----------------------------------------------
+
+    st.divider()
+    st.subheader("📄 Chat Documents")
+
+    active_id = st.session_state.active_thread_id
+
+    uploaded_pdf = st.file_uploader(
+        "Upload a PDF for this chat",
+        type=["pdf"],
+        key=f"pdf_upload_{active_id}",
+    )
+
+    if st.button(
+        "Process PDF",
+        use_container_width=True,
+        disabled=uploaded_pdf is None,
+    ):
+        upload_dir = (
+            PROJECT_ROOT / "uploaded_documents" / active_id
+        )
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        file_bytes = uploaded_pdf.getvalue()
+        file_hash = hashlib.sha256(file_bytes).hexdigest()
+        marker_path = upload_dir / "document.json"
+
+        previous_hash = None
+        if marker_path.exists():
+            try:
+                previous_hash = json.loads(
+                    marker_path.read_text(encoding="utf-8")
+                ).get("sha256")
+            except (OSError, json.JSONDecodeError):
+                previous_hash = None
+
+        if previous_hash == file_hash:
+            st.info("This PDF has already been processed for this chat.")
+        else:
+            safe_name = Path(uploaded_pdf.name).name
+            pdf_path = upload_dir / safe_name
+            pdf_path.write_bytes(file_bytes)
+
+            try:
+                with st.spinner(
+                    "Extracting PDF text and creating Gemini embeddings..."
+                ):
+                    pages, chunks = ingest_pdf(
+                        pdf_path=str(pdf_path),
+                        document_id=active_id,
                     )
+
+                marker_path.write_text(
+                    json.dumps({
+                        "document_id": active_id,
+                        "filename": safe_name,
+                        "sha256": file_hash,
+                    }),
+                    encoding="utf-8",
+                )
+
+                st.success(
+                    f"Processed {safe_name}\n\n"
+                    f"Pages loaded: {pages}\n\n"
+                    f"Chunks indexed: {chunks}"
+                )
+
+            except Exception as error:
+                st.error(f"PDF processing failed: {error}")
 
 
 # --------------------------------------------------
-# 8. Select the active thread
+# 7. Select active thread and configure RAG
 # --------------------------------------------------
 
 thread_id = st.session_state.active_thread_id
 
+marker_path = (
+    PROJECT_ROOT
+    / "uploaded_documents"
+    / thread_id
+    / "document.json"
+)
+
+document_id = None
+
+if marker_path.exists():
+    try:
+        document_metadata = json.loads(
+            marker_path.read_text(encoding="utf-8")
+        )
+        document_id = document_metadata.get("document_id")
+    except (OSError, json.JSONDecodeError):
+        document_id = None
+
 config = {
     "configurable": {
-        "thread_id": thread_id
+        "thread_id": thread_id,
+        "document_id": document_id,
     }
 }
 
 
 # --------------------------------------------------
-# 9. Load saved messages from LangGraph
+# 8. Load saved messages
 # --------------------------------------------------
 
 try:
     saved_state = workflow.get_state(config)
     saved_messages = saved_state.values.get("messages", [])
-
 except Exception as error:
     st.error(f"Could not load conversation: {error}")
     st.stop()
 
 
 # --------------------------------------------------
-# 10. Display conversation history
+# 9. Display conversation history
 # --------------------------------------------------
 
 def message_to_text(message):
@@ -240,30 +304,23 @@ for message in saved_messages:
 
 
 # --------------------------------------------------
-# 11. User input and streaming response
+# 10. User input and streaming response
 # --------------------------------------------------
 
 user_input = st.chat_input("Message your chatbot...")
 
 if user_input:
-
-    chat_manager.update_thread_title(
-        thread_id,
-        user_input,
-    )
+    chat_manager.update_thread_title(thread_id, user_input)
 
     with st.chat_message("user"):
         st.markdown(user_input)
 
     with st.chat_message("assistant"):
         try:
+
             def stream_response():
                 for chunk, metadata in workflow.stream(
-                    {
-                        "messages": [
-                            ("human", user_input)
-                        ]
-                    },
+                    {"messages": [("human", user_input)]},
                     config=config,
                     stream_mode="messages",
                 ):
@@ -282,7 +339,6 @@ if user_input:
                                 and block.get("type") == "text"
                             ):
                                 text = block.get("text", "")
-
                                 if text:
                                     yield text
 

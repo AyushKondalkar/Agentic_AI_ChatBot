@@ -7,7 +7,10 @@ DB_PATH = Path(__file__).resolve().parents[1] / "chatbot_memory.db"
 
 
 def get_checkpointer():
-    # Keep the SQLite connection open for the app's lifetime.
+    """
+    Return an open SQLite checkpointer and its connection context.
+    The caller must close the connection when finished.
+    """
     connection = SqliteSaver.from_conn_string(str(DB_PATH))
     checkpointer = connection.__enter__()
 
@@ -17,7 +20,7 @@ def get_checkpointer():
 def delete_thread_checkpoints(checkpointer, thread_id: str):
     """
     Delete all SQLite checkpoint records belonging to one thread.
-    Other threads are left untouched.
+    Other threads remain untouched.
     """
     conn = checkpointer.conn
     lock = getattr(checkpointer, "lock", None)
@@ -28,7 +31,6 @@ def delete_thread_checkpoints(checkpointer, thread_id: str):
     try:
         conn.execute("BEGIN IMMEDIATE")
 
-        # Find checkpoint tables containing a thread_id column.
         tables = conn.execute(
             """
             SELECT name
@@ -39,7 +41,6 @@ def delete_thread_checkpoints(checkpointer, thread_id: str):
         ).fetchall()
 
         for (table_name,) in tables:
-            # Table names come from SQLite's own schema.
             quoted_table = '"' + table_name.replace('"', '""') + '"'
 
             columns = conn.execute(

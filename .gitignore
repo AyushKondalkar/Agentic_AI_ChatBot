@@ -33,3 +33,18 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Chroma vector databases
+chroma_db/
+chroma_db_gemini/
+chroma_db_jina/
+
+# Uploaded PDF documents
+uploaded_documents/
+
+
+# Local source documents (may contain copyrighted or private PDFs)
+documents/
+
+# Local uploaded documents
+uploaded_documents/
